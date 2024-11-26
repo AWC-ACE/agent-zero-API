@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pydantic import BaseModel
 from agent import Agent, AgentConfig # Import Agent logic
+import asyncio
 import models
 import os
 
@@ -13,7 +14,6 @@ import os
 # then 'conda activate a0'
 # then 'pip install -r requirements.txt' do
 # then 'flask run'
-
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -45,9 +45,55 @@ class ExecuteResponse(BaseModel):
     status: str
     data: dict
 
-@app.route('/api/test', methods=['GET'])
+@app.route('/api/test', methods=['POST'])
 def test_api():
-    return jsonify({'message': 'API is working!'}), 200
+    try:
+        # Get the question from the request
+        data = request.get_json()
+        question = data.get('question')
+
+        if not question:
+            return jsonify({'error': 'No question provided'}), 400
+
+        # Initialize models as in main.py
+        chat_llm = models.get_openai_chat(model_name="gpt-4o-mini", temperature=0)
+        utility_llm = chat_llm
+        embedding_llm = models.get_openai_embedding(model_name="text-embedding-3-small")
+
+        # Configure the Agent as in main.py
+        config = AgentConfig(
+            chat_model=chat_llm,
+            utility_model=utility_llm,
+            embeddings_model=embedding_llm,
+            auto_memory_count=0,
+            rate_limit_requests=10,
+            rate_limit_input_tokens=0,
+            rate_limit_output_tokens=0,
+            rate_limit_seconds=60,
+            max_tool_response_length=3000,
+            code_exec_docker_enabled=True,
+            code_exec_ssh_enabled=True,
+        )
+
+        # Initialize the Agent
+        agent = Agent(number=1, config=config)
+
+        # Use the asyncio event loop to run the monologue coroutine
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        result = loop.run_until_complete(agent.monologue(question))
+
+        # Return the agent's response
+        return jsonify({'message': result}), 200
+
+    except Exception as e:
+        # Log the exception
+        print(f'Error: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
 
 @app.route('/api/evaluate-contract', methods=['POST'])
 def evaluate_contract():
@@ -119,7 +165,6 @@ def assess_risk(contract_text, guidelines):
 def format_output(template, risk_assessment):
     # Format the output using the template and risk assessment results
     return template.replace('{risk_level}', risk_assessment['risk_level'])
-
 
 if __name__ == '__main__':
     # Run the Flask application in debug mode
