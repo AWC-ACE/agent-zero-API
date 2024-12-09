@@ -42,7 +42,7 @@ def initialize():
         # msgs_keep_max = 25,
         # msgs_keep_start = 5,
         # msgs_keep_end = 10,
-        max_tool_response_length = 3000,
+        max_tool_response_length = 15000,
         # response_timeout_seconds = 60,
         code_exec_docker_enabled = True,
         # code_exec_docker_name = "agent-zero-exe",

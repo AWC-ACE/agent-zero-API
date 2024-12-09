@@ -74,7 +74,7 @@ def test_api():
             rate_limit_input_tokens=0,
             rate_limit_output_tokens=0,
             rate_limit_seconds=60,
-            max_tool_response_length=6500,
+            max_tool_response_length=15000,
             code_exec_docker_enabled=True,
             code_exec_ssh_enabled=True,
         )
@@ -163,7 +163,7 @@ def assess_risk(contract_text, guidelines):
             rate_limit_input_tokens=0,
             rate_limit_output_tokens=0,
             rate_limit_seconds=60,
-            max_tool_response_length=6500,
+            max_tool_response_length=15000,
             code_exec_docker_enabled=True,
             code_exec_ssh_enabled=True,
         )
