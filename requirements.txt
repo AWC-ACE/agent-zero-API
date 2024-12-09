@@ -28,5 +28,4 @@ pydantic
 virtualenv
 Flask
 flask_cors
-fastapi==0.95.1
-uvicorn==0.22.0
+python-docx
