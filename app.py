@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from agent import Agent, AgentConfig # Import Agent logic
 from docx import Document
 import logging
+import json
+import re
 import asyncio
 import models
 import os
@@ -140,15 +142,13 @@ def evaluate_contract():
     with open(template_path, 'r') as f:
         template = f.read()
 
-    risk_assessment = assess_risk(contract_text, guidelines)
-
-    output = format_output(template, risk_assessment)
+    risk_assessment = assess_risk(contract_text, guidelines, template)
 
     logger.debug('Returning assessment output')
-    return jsonify({'assessment': output}), 200
+    return jsonify({'assessment': risk_assessment}), 200
 
 
-def assess_risk(contract_text, guidelines):
+def assess_risk(contract_text, guidelines, template):
     try:
         chat_llm = models.get_openai_chat(model_name="gpt-4o", temperature=0)
         utility_llm = chat_llm
@@ -176,20 +176,13 @@ def assess_risk(contract_text, guidelines):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-        prompt = f"Using the guidelines: {guidelines}, assess the contract: {contract_text}"
+        prompt = f"Using the guidelines: {guidelines}, assess the contract: {contract_text}. Fill in the following template: {template}"
         result = loop.run_until_complete(agent.monologue(prompt))
 
+        # Directly use the agent's result as the filled assessment
         return result
-
     except Exception as e:
         return {'error': str(e)}
-
-
-def format_output(template, risk_assessment):
-    filled_assessment = template
-    for key, value in risk_assessment.items():
-        filled_assessment = filled_assessment.replace(f'{{{key}}}', value)
-    return filled_assessment
 
 if __name__ == '__main__':
     app.run(debug=True)
