@@ -8,6 +8,7 @@
 
 # Ignore all contents of the virtual environment directory
 .venv/
+venv/
 
 # ignore all folders under /bundle
 bundle/*/

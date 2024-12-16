@@ -29,3 +29,6 @@ virtualenv
 Flask
 flask_cors
 python-docx
+swig
+langchain-core>=0.2.10,<0.3
+pypdf
