@@ -204,13 +204,13 @@ def chunk_text(text, chunk_size=15000):
     return chunks
 
 async def assess_risk(contract_text, guidelines, template):
-    # Calculate sections with larger chunks for GPT-4
+    # Calculate smaller sections for GPT-4o mini's token limit
     content_length = len(contract_text)
-    total_sections = min(max(3, content_length // 8000), 8)  # Increased from 3000 to 8000
+    total_sections = min(max(4, content_length // 3000), 10)  # Back to smaller chunks
     logger.debug(f'Starting analysis with {total_sections} sections')
     
     try:
-        chat_llm = models.get_openai_chat(model_name="gpt-4o", temperature=0)  # Changed to GPT-4
+        chat_llm = models.get_openai_chat(model_name="gpt-4o-mini", temperature=0)  # Changed to mini
         utility_llm = chat_llm
         embedding_llm = models.get_openai_embedding(model_name="text-embedding-3-small")
 
@@ -245,50 +245,77 @@ async def assess_risk(contract_text, guidelines, template):
                 f.write(section)
             logger.debug(f'Saved section {i} to {section_path}')
 
-        # Process sections with larger content
+        # Process sections with adjusted content sizes
         analyses = []
         for i, section in enumerate(sections, 1):
             logger.debug(f'Processing section {i} of {total_sections}')
             
+            # Extract relevant guidelines to save tokens
+            relevant_guidelines = "\n".join(
+                line for line in guidelines.split('\n')
+                if any(keyword in line.lower() for keyword in ['risk', 'assess'])
+            )[:1000]  # Limit guidelines size
+            
             prompt = (
                 f"Section {i}/{total_sections} Analysis:\n\n"
-                f"CONTRACT TEXT:\n{section}\n\n"  # Include section content directly
-                f"GUIDELINES:\n{guidelines}\n\n"
-                f"Analyze this section against the guidelines. For each relevant point:\n"
-                f"1. Quote specific contract language\n"
-                f"2. Explain implications (2-3 sentences)\n"
-                f"3. Assign risk level (Red/Orange/Yellow/Green)\n"
-                f"4. Justify risk assessment"
+                f"CONTRACT TEXT:\n{section[:2000]}\n\n"
+                f"GUIDELINES:\n{relevant_guidelines}\n\n"
+                f"CRITICAL INSTRUCTIONS:\n"
+                f"1. ONLY analyze content that EXACTLY matches guidelines\n"
+                f"2. For each match found:\n"
+                f"   - Quote: '[exact contract language]' or 'Missing Information'\n"
+                f"   - Location: [exact section title from contract] or 'Not Specified'\n"
+                f"     Example good: 'Article 5: Confidentiality Terms'\n"
+                f"     Example bad: 'Section 5' or 'Section 5/10'\n"
+                f"   - Explanation: [direct match to guideline requirement]\n"
+                f"   - Risk Level: [Red/Orange/Yellow/Green per guideline]\n"
+                f"   - Justification: [specific reason based on guidelines]\n"
+                f"3. If no EXACT match exists, do not force connections\n"
+                f"4. Do not infer or assume information\n"
             )
             
             try:
                 analysis = await asyncio.wait_for(
                     agents[f'section_{i}'].monologue(prompt),
-                    timeout=180  # Increased timeout
+                    timeout=120
                 )
-                analyses.append(analysis[:2000])  # Increased from 500
+                analyses.append(analysis[:800])  # Reduced analysis size
                 logger.debug(f'Completed section {i} analysis')
             except asyncio.TimeoutError:
                 logger.warning(f"Section {i} analysis timed out")
                 analyses.append(f"Section {i}: Analysis timed out")
 
-        # Fuller synthesis prompt with better combination instructions
+        # Stricter synthesis prompt with complete format
         synthesis_prompt = (
-            f"Complete this risk assessment form by combining all section analyses.\n\n"
-            f"SECTION ANALYSES:\n"
-            f"{chr(10).join(f'SECTION {i+1}:\n{analysis[:1000]}' for i, analysis in enumerate(analyses))}\n\n"
-            f"TEMPLATE TO COMPLETE:\n{template}\n\n"
-            f"IMPORTANT INSTRUCTIONS:\n"
-            f"1. Review ALL section analyses before answering each question\n"
-            f"2. Combine relevant information from different sections\n"
-            f"3. Only mark as 'missing information' if NO section contains relevant details\n"
-            f"4. For each template question:\n"
-            f"   - Quote specific contract language found in ANY section\n"
-            f"   - Explain implications comprehensively\n"
-            f"   - Assign appropriate risk level based on ALL available information\n"
-            f"   - Provide detailed justification\n"
-            f"5. If truly no information exists, mark as Red risk\n\n"
-            f"Begin template completion with 'Contract Risk Assessment'"
+            f"Complete risk assessment form by combining analyses:\n\n"
+            f"ANALYSES:\n"
+            f"{chr(10).join(f'SECTION {i+1}:\n{analysis[:500]}' for i, analysis in enumerate(analyses))}\n\n"
+            f"GUIDELINES:\n{guidelines}\n\n"
+            f"TEMPLATE:\n{template}\n\n"
+            f"CRITICAL INSTRUCTIONS:\n"
+            f"1. For each template question, use this EXACT format:\n\n"
+            f"   [Question Number]. [Question Text]\n\n"
+            f"   Quote: '[exact contract language]' or 'Missing Information'\n"
+            f"   Location: [exact section title from contract] or 'Not Specified'\n"
+            f"   Explanation: [how this affects AWC's obligations]\n"
+            f"   Risk Level: [Red/Orange/Yellow/Green]\n"
+            f"   Justification: [specific reason for risk level]\n\n"
+            f"2. Example format:\n"
+            f"   1. Does the contract contain mutual confidentiality obligations?\n\n"
+            f"   Quote: 'All parties agree to maintain confidentiality'\n"
+            f"   Location: Article 7: Confidentiality Obligations\n"
+            f"   Explanation: Establishes mutual confidentiality requirements\n"
+            f"   Risk Level: Green\n"
+            f"   Justification: Mutual obligations protect both parties\n\n"
+            f"3. If no exact match exists:\n"
+            f"   Quote: 'Missing Information'\n"
+            f"   Location: 'Not Specified'\n"
+            f"   Explanation: 'No specific language addressing this requirement'\n"
+            f"   Risk Level: Red\n"
+            f"   Justification: 'Absence of required terms creates significant risk'\n\n"
+            f"4. Do not force connections or make assumptions\n"
+            f"5. Complete ALL questions with ALL format elements\n\n"
+            f"Begin with 'Contract Risk Assessment'"
         )
 
         try:
