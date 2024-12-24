@@ -15,8 +15,10 @@ import shutil
 import datetime
 
 # navigate to directory
-# add API endpoints to example.env and change from example.env to .env
+# add API endpoints to example.env and change file name from example.env to .env
 # add FLASK_APP=app.py to .env
+# download and install python 3.12.1 and conda
+# use agentzero docs for assistance to get started based on your environment
 # type 'virtualenv venv' into terminal
 # then 'source venv/bin/activate'
 # then 'conda activate a0'
