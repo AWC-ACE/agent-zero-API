@@ -12,6 +12,7 @@ import models
 import os
 import uuid
 import shutil
+import datetime
 
 # navigate to directory
 # add API endpoints to example.env and change from example.env to .env
@@ -54,22 +55,21 @@ class ExecuteResponse(BaseModel):
     status: str
     data: dict
 
-@app.route('/api/test', methods=['POST'])
-def test_api():
+@app.route('/api/question', methods=['POST'])
+def question_api():
     try:
-        # Get the question from the request
         data = request.get_json()
         question = data.get('question')
+        previous_analysis = data.get('previous_analysis', '')  # Get previous analysis if provided
 
         if not question:
             return jsonify({'error': 'No question provided'}), 400
 
-        # Initialize models as in main.py
-        chat_llm = models.get_openai_chat(model_name="gpt-4o", temperature=0)
+        # Initialize models
+        chat_llm = models.get_openai_chat(model_name="gpt-4o-mini", temperature=0)
         utility_llm = chat_llm
         embedding_llm = models.get_openai_embedding(model_name="text-embedding-3-small")
 
-        # Configure the Agent as in main.py
         config = AgentConfig(
             chat_model=chat_llm,
             utility_model=utility_llm,
@@ -79,35 +79,43 @@ def test_api():
             rate_limit_input_tokens=0,
             rate_limit_output_tokens=0,
             rate_limit_seconds=60,
-            max_tool_response_length=150000,
-            code_exec_docker_enabled=True,
-            code_exec_ssh_enabled=True,
+            max_tool_response_length=15000,
+            code_exec_docker_enabled=False,
+            code_exec_ssh_enabled=False
         )
 
         # Initialize the Agent
         agent = Agent(number=1, config=config)
 
-        # Use the asyncio event loop to run the monologue coroutine
+        # Create prompt that includes previous analysis if available
+        prompt = (
+            f"Previous Contract Analysis:\n{previous_analysis}\n\n"
+            f"Question about the analysis:\n{question}\n\n"
+            f"Instructions:\n"
+            f"1. Answer based ONLY on information in the previous analysis\n"
+            f"2. If the answer cannot be found in the analysis, say so\n"
+            f"3. Do not make assumptions beyond what's stated\n"
+            f"4. Quote relevant parts of the analysis when possible\n"
+        ) if previous_analysis else question
+
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             
-        result = loop.run_until_complete(agent.monologue(question))
+        result = loop.run_until_complete(agent.monologue(prompt))
 
-        # Return the agent's response
         return jsonify({'message': result}), 200
 
     except Exception as e:
-        # Log the exception
-        print(f'Error: {str(e)}')
-        return jsonify({'error': 'Internal server error'}), 500
+        logger.error(f'Error in test_api: {e}')
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/evaluate-contract', methods=['POST'])
 async def evaluate_contract():
     logger.debug('Received request to evaluate contract')
-    temp_files = []  # Initialize at start of function
+    temp_files = []  # Keep track for error handling only
 
     if 'files' not in request.files:
         logger.error('No file part in the request')
@@ -165,19 +173,13 @@ async def evaluate_contract():
         contract_text = "\n\n=== NEW DOCUMENT ===\n\n".join(combined_text)
         
         # Rest of the function...
-        result = await assess_risk(contract_text, guidelines, template)
-
-        # Cleanup temp files
-        for path in temp_files:
-            if os.path.exists(path):
-                os.remove(path)
-                logger.debug(f'Removed temp file: {path}')
+        result = await assess_risk(contract_text, guidelines, template, files)
 
         return jsonify({'assessment': result}), 200
 
     except Exception as e:
         logger.error(f'Error in evaluate_contract: {e}')
-        # Cleanup on error
+        # Cleanup only on error
         for path in temp_files:
             if os.path.exists(path):
                 os.remove(path)
@@ -203,7 +205,7 @@ def chunk_text(text, chunk_size=15000):
         chunks.append(' '.join(current_chunk))
     return chunks
 
-async def assess_risk(contract_text, guidelines, template):
+async def assess_risk(contract_text, guidelines, template, files):
     # Calculate smaller sections for GPT-4o mini's token limit
     content_length = len(contract_text)
     total_sections = min(max(4, content_length // 3000), 10)  # Back to smaller chunks
@@ -261,17 +263,17 @@ async def assess_risk(contract_text, guidelines, template):
                 f"CONTRACT TEXT:\n{section[:2000]}\n\n"
                 f"GUIDELINES:\n{relevant_guidelines}\n\n"
                 f"CRITICAL INSTRUCTIONS:\n"
-                f"1. ONLY analyze content that EXACTLY matches guidelines\n"
-                f"2. For each match found:\n"
-                f"   - Quote: '[exact contract language]' or 'Missing Information'\n"
+                f"1. Analyze content that CLOSELY matches guidelines\n"
+                f"2. For each relevant match found:\n"
+                f"   - Quote: '[relevant contract language]' or 'Missing Information'\n"
                 f"   - Location: [exact section title from contract] or 'Not Specified'\n"
                 f"     Example good: 'Article 5: Confidentiality Terms'\n"
                 f"     Example bad: 'Section 5' or 'Section 5/10'\n"
-                f"   - Explanation: [direct match to guideline requirement]\n"
+                f"   - Explanation: [how this relates to guideline requirement]\n"
                 f"   - Risk Level: [Red/Orange/Yellow/Green per guideline]\n"
-                f"   - Justification: [specific reason based on guidelines]\n"
-                f"3. If no EXACT match exists, do not force connections\n"
-                f"4. Do not infer or assume information\n"
+                f"   - Justification: [reason based on guidelines]\n"
+                f"3. Look for content that addresses the spirit of each guideline\n"
+                f"4. Make reasonable connections but avoid speculation\n"
             )
             
             try:
@@ -285,7 +287,18 @@ async def assess_risk(contract_text, guidelines, template):
                 logger.warning(f"Section {i} analysis timed out")
                 analyses.append(f"Section {i}: Analysis timed out")
 
-        # Stricter synthesis prompt with complete format
+        # Get contract title from filename(s), remove extension and clean up
+        contract_titles = [os.path.splitext(f.filename)[0].replace('_', ' ').strip() for f in files if f.filename]
+        if len(contract_titles) > 1:
+            contract_title = f"Multiple Contracts: {', '.join(contract_titles)}"
+        else:
+            contract_title = contract_titles[0] if contract_titles else "Untitled Contract"
+            
+        # Remove common suffixes like "Template" or "Assessment"
+        contract_title = re.sub(r'\b(Template|Assessment|Risk)\b', '', contract_title, flags=re.IGNORECASE).strip()
+        analysis_date = datetime.datetime.now().strftime("%B %d, %Y")
+
+        # Synthesis prompt with better title extraction instructions
         synthesis_prompt = (
             f"Complete risk assessment form by combining analyses:\n\n"
             f"ANALYSES:\n"
@@ -293,28 +306,39 @@ async def assess_risk(contract_text, guidelines, template):
             f"GUIDELINES:\n{guidelines}\n\n"
             f"TEMPLATE:\n{template}\n\n"
             f"CRITICAL INSTRUCTIONS:\n"
-            f"1. For each template question, use this EXACT format:\n\n"
-            f"   [Question Number]. [Question Text]\n\n"
-            f"   Quote: '[exact contract language]' or 'Missing Information'\n"
-            f"   Location: [exact section title from contract] or 'Not Specified'\n"
-            f"   Explanation: [how this affects AWC's obligations]\n"
-            f"   Risk Level: [Red/Orange/Yellow/Green]\n"
-            f"   Justification: [specific reason for risk level]\n\n"
-            f"2. Example format:\n"
+            f"1. First, extract the exact contract title:\n"
+            f"   - Look at the very beginning of Section 1's analysis\n"
+            f"   - Find text like 'Agreement', 'Contract', 'NDA' with any company names\n"
+            f"   - Example: If you see 'Georgia-Pacific(GP) Non-Disclosure Agreement (NDA)', use that\n"
+            f"   - If no formal title found, use '{contract_title}'\n\n"
+            f"2. Start the assessment with:\n"
+            f"Contract Risk Assessment\n"
+            f"Contract ID: [EXACT contract title from document]\n"
+            f"Analysis Date: {analysis_date}\n\n"
+            f"3. For each template question:\n"
+            f"   - Find relevant content that addresses the question\n"
+            f"   - Quote: Must be EXACT text from contract (2-3 sentences)\n"
+            f"   - Location: [exact section title from contract] or 'Not Specified'\n"
+            f"   - Explanation: [how this affects AWC's obligations]\n"
+            f"   - Risk Level: [Red/Orange/Yellow/Green]\n"
+            f"   - Justification: Quote the relevant guideline AND explain how the contract aligns or conflicts\n\n"
+            f"4. Example format:\n"
             f"   1. Does the contract contain mutual confidentiality obligations?\n\n"
-            f"   Quote: 'All parties agree to maintain confidentiality'\n"
+            f"   Quote: 'Each party agrees to maintain the confidentiality of all information received from the other party. The receiving party shall protect such information with at least the same degree of care as it protects its own confidential information.'\n"
             f"   Location: Article 7: Confidentiality Obligations\n"
             f"   Explanation: Establishes mutual confidentiality requirements\n"
             f"   Risk Level: Green\n"
-            f"   Justification: Mutual obligations protect both parties\n\n"
-            f"3. If no exact match exists:\n"
+            f"   Justification: Per AWC guidelines: 'Mutual obligations on both parties - Low risk.' This contract establishes mutual obligations, which aligns with the preferred risk profile. The reciprocal nature of the obligations provides balanced protection for both parties.\n\n"
+            f"5. If no exact match exists:\n"
             f"   Quote: 'WARNING: Potential Missing Information'\n"
             f"   Location: 'Not included or not specified in contract.'\n"
             f"   Explanation: 'No specific language addressing this requirement was found.'\n"
             f"   Risk Level: Red\n"
-            f"   Justification: 'Absence of required terms creates significant risk. Requires manual review.'\n\n"
-            f"4. Do not force connections or make assumptions\n"
-            f"5. Complete ALL questions with ALL format elements\n\n"
+            f"   Justification: Per AWC guidelines: 'Missing critical terms creates significant risk.' The absence of these terms leaves AWC exposed without necessary protections.\n\n"
+            f"6. IMPORTANT:\n"
+            f"   - Quotes must be exact contract language\n"
+            f"   - Justifications must quote relevant AWC guidelines\n"
+            f"7. Complete ALL questions with ALL format elements\n\n"
             f"Begin with 'Contract Risk Assessment'"
         )
 
@@ -342,6 +366,30 @@ async def assess_risk(contract_text, guidelines, template):
                     os.remove(path)
         except Exception as e:
             logger.error(f'Cleanup error: {e}')
+
+@app.route('/api/end-session', methods=['POST'])
+async def complete_analysis():
+    """Cleanup endpoint to remove temporary files after analysis is done"""
+    try:
+        temp_dir = 'knowledge/default/temp'
+        files_removed = 0
+        
+        # Clean up all files in temp directory
+        for filename in os.listdir(temp_dir):
+            file_path = os.path.join(temp_dir, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+                files_removed += 1
+                logger.debug(f'Removed temp file: {file_path}')
+        
+        return jsonify({
+            'message': 'Analysis completed and cleaned up',
+            'files_removed': files_removed
+        }), 200
+
+    except Exception as e:
+        logger.error(f'Error in complete_analysis: {e}')
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
