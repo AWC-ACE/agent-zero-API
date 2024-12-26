@@ -354,20 +354,13 @@ async def assess_risk(contract_text, guidelines, template, files):
         except asyncio.TimeoutError:
             logger.error("Synthesis timed out")
             return {"error": "Synthesis timed out - please try again"}
+        except Exception as e:
+            logger.error(f'Error in assess_risk: {e}')
+            return {'error': str(e)}
 
     except Exception as e:
         logger.error(f'Error in assess_risk: {e}')
         return {'error': str(e)}
-
-    finally:
-        # Cleanup in finally block
-        try:
-            for i in range(1, total_sections + 1):
-                path = f'knowledge/default/temp/section_{i}.txt'
-                if os.path.exists(path):
-                    os.remove(path)
-        except Exception as e:
-            logger.error(f'Cleanup error: {e}')
 
 @app.route('/api/end-session', methods=['POST'])
 async def complete_analysis():
