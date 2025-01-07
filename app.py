@@ -27,7 +27,17 @@ import datetime
 
 # Initialize the Flask application
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://aceapp01:3000",
+            "https://aceapp01:3000"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"],
+        "supports_credentials": True
+    }
+})
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
