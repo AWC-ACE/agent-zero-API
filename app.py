@@ -27,17 +27,16 @@ import datetime
 
 # Initialize the Flask application
 app = Flask(__name__)
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "http://aceapp01:3000",
-            "https://aceapp01:3000"
-        ],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept"],
-        "supports_credentials": True
-    }
-})
+
+# Allow requests from http://aceapp01:3000 with credentials
+CORS(
+    app, 
+    resources={r"/*": {"origins": ["http://aceapp01:3000"]}}, 
+    supports_credentials=True
+)
+
+# uncomment below lines for running locally and not on VM
+# CORS(app)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -397,4 +396,4 @@ async def complete_analysis():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
